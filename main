@@ -19,9 +19,7 @@ local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/heavy
 local Window = Library.CreateLib("Entry Point ESP/Aimlock", "DarkTheme")
 
 local EspTab = Window:NewTab("ESP")
-local AimlockTab = Window:NewTab("Aimlock")
-
-local ClassEspSection = EspTab:NewSection("Classes")
+local ClassEspSection = EspTab:NewSection("Class ESP")
 local SettingsSection = EspTab:NewSection("Settings")
 
 local function findFirstChildByNamePrefix(instance, prefix)
@@ -33,42 +31,48 @@ local function findFirstChildByNamePrefix(instance, prefix)
 	return nil
 end
 
-local levelFolder: Folder = workspace.Level
-local instanceFolder: Folder = findFirstChildByNamePrefix(levelFolder, "Instance")
+local levelFolder = workspace:WaitForChild("Level")
+local instanceFolder = findFirstChildByNamePrefix(levelFolder, "Instance")
 
 local connections = {}
-
-local function closeConnections()
-	for _, connection in ipairs(connections) do
-		connection:Disconnect()
-	end
-	table.clear(connections)
-end
-
 local toggles = {}
 local espState = {}
 local activeEsp = {}
 local includeDead = false
 local assignedColors = {}
+local modelClassMap = {}
 
 local classColorOverrides = {
-	Civ = Color3.fromRGB(255, 255, 255),
-	Combat = Color3.fromRGB(102, 102, 102)
+	Civ = Color3.fromRGB(255,255,255),
+	Combat = Color3.fromRGB(102,102,102)
 }
 
 local classTextTranslations = {
 	Sec = "Security",
 	Emp = "Employee",
-	Civ = "Civilian"
+	Civ = "Civilian",
+	Combat = "SWAT"
 }
+
+local preClass = {
+	"Combat",
+	"Sec",
+	"Civ"
+}
+
+local function closeConnections()
+	for _, c in ipairs(connections) do
+		c:Disconnect()
+	end
+	table.clear(connections)
+end
 
 local function generateColorFromString(str)
 	local hash = 0
 	for i = 1, #str do
-		hash = hash + string.byte(str, i) * i
+		hash += string.byte(str, i) * i
 	end
-	local hue = (hash % 360) / 360
-	return Color3.fromHSV(hue, 0.8, 1)
+	return Color3.fromHSV((hash % 360)/360, 0.8, 1)
 end
 
 local function getColorForClass(class)
@@ -85,50 +89,8 @@ local function getDisplayName(class)
 	return classTextTranslations[class] or class
 end
 
-local function getModelForNpc(botModelFolder, npc)
-	for _, model in ipairs(botModelFolder:GetChildren()) do
-		for _, attrValue in pairs(model:GetAttributes()) do
-			if attrValue == npc.Name then
-				return model
-			end
-		end
-	end
-	return nil
-end
-
-local function addEsp(model, class)
-	if not model then return end
-	if activeEsp[model] then return end
-	if not includeDead and model:FindFirstChild("Joints") then return end
-
-	local color = getColorForClass(class)
-	local displayName = getDisplayName(class)
-
-	local highlight = Instance.new("Highlight")
-	highlight.FillColor = color
-	highlight.OutlineColor = color
-	highlight.FillTransparency = 0.5
-	highlight.Parent = model
-
-	local billboard = Instance.new("BillboardGui")
-	billboard.Size = UDim2.new(0, 120, 0, 30)
-	billboard.AlwaysOnTop = true
-	billboard.Parent = model
-
-	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 1, 0)
-	label.BackgroundTransparency = 1
-	label.RichText = true
-	label.TextScaled = true
-	label.Text = "<b>" .. string.upper(displayName) .. "</b>"
-	label.TextColor3 = color
-	label.TextStrokeTransparency = 0
-	label.Parent = billboard
-
-	activeEsp[model] = {
-		Highlight = highlight,
-		Billboard = billboard
-	}
+local function isDead(model)
+	return model:FindFirstChild("Folder", true) or model:FindFirstChild("Joints", true) ~= nil
 end
 
 local function removeEsp(model)
@@ -139,139 +101,146 @@ local function removeEsp(model)
 	activeEsp[model] = nil
 end
 
+local function addEsp(model, class)
+	if not espState[class] then
+		removeEsp(model)
+		return
+	end
+
+	local dead = isDead(model)
+
+	if not includeDead and dead then
+		removeEsp(model)
+		return
+	end
+
+	if activeEsp[model] then
+		removeEsp(model)
+	end
+
+	local color = getColorForClass(class)
+
+	local highlight = Instance.new("Highlight")
+	highlight.FillColor = color
+	highlight.OutlineColor = color
+	highlight.FillTransparency = dead and 0.85 or 0.5
+	highlight.OutlineTransparency = dead and 0.85 or 0.5
+	highlight.Parent = model
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.new(0,120,0,30)
+	billboard.AlwaysOnTop = true
+	billboard.StudsOffset = Vector3.new(0,3,0)
+	billboard.Parent = model
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1,0,1,0)
+	label.BackgroundTransparency = 1
+	label.TextTransparency = dead and 0.5 or 0
+	label.RichText = true
+	label.TextScaled = true
+
+	local display = "<b>" .. string.upper(getDisplayName(class)) .. "</b>"
+	if dead then
+		display = display .. " (dead/KO)"
+	end
+
+	label.Text = display
+	label.TextColor3 = color
+	label.TextStrokeTransparency = 0
+	label.Parent = billboard
+
+	activeEsp[model] = {
+		Highlight = highlight,
+		Billboard = billboard
+	}
+end
+
+local function rebuildEsp()
+	for model in pairs(activeEsp) do
+		removeEsp(model)
+	end
+	for model, class in pairs(modelClassMap) do
+		addEsp(model, class)
+	end
+end
+
 SettingsSection:NewToggle(
-	"Include Dead Bots",
-	"If enabled, ESP will include bots with Joints (dead).",
+	"Include Dead/KO Bots",
+	"Includes Dead/KO bots in the ESP though they'll have special markings to help differentiate.",
 	function(state)
 		includeDead = state
-		for model in pairs(activeEsp) do
-			if not includeDead and model:FindFirstChild("Joints") then
-				removeEsp(model)
-			else
-				local class = model:GetAttribute("Class")
-				if espState[class] then
-					addEsp(model, class)
-				end
-			end
-		end
+		rebuildEsp()
 	end
 )
 
 local function hook()
 	closeConnections()
+	table.clear(modelClassMap)
 
-	local botDataFolder: Folder = instanceFolder:WaitForChild("BotData")
-	local botModelFolder: Folder = instanceFolder:WaitForChild("BotModel")
+	local botDataFolder = instanceFolder:WaitForChild("BotData")
+	local botModelFolder = instanceFolder:WaitForChild("BotModel")
 
-	local trackedNpcs = {}
+	local function createToggle(class)
+		if toggles[class] then return end
+		espState[class] = false
 
-	local function tryApply(npc)
-		local class = npc:GetAttribute("Class")
-		if not class then return end
-		if not espState[class] then return end
+		toggles[class] = ClassEspSection:NewToggle(
+			getDisplayName(class) .. " ESP",
+			"",
+			function(state)
+				espState[class] = state
+				rebuildEsp()
+			end
+		)
 
-		local model = getModelForNpc(botModelFolder, npc)
-		if not model then return end
+		CoreGuiNotification("Class Loaded", class .. " toggle loaded.", 3)
+	end
 
-		if not includeDead and model:FindFirstChild("Joints") then
-			removeEsp(model)
-			return
-		end
+	local function bindModel(model, class)
+		modelClassMap[model] = class
+
+		table.insert(connections, model.ChildAdded:Connect(function(child)
+			print(child:GetFullName())
+			if child.Name == "Folder" or child.Name == "Joints" then
+				addEsp(model, class)
+			end
+		end))
+
+		table.insert(connections, model.ChildRemoved:Connect(function(child)
+			if child.Name == "Folder" or child.Name == "Joints" then
+				addEsp(model, class)
+			end
+		end))
 
 		addEsp(model, class)
 	end
 
-	local function createClassToggle(class)
-		if toggles[class] then return end
-
-		local displayName = getDisplayName(class)
-		espState[class] = espState[class] or false
-
-		toggles[class] = ClassEspSection:NewToggle(
-			displayName .. " ESP",
-			"Toggles ESP for " .. displayName,
-			function(state)
-				espState[class] = state
-				for _, npc in ipairs(botDataFolder:GetChildren()) do
-					if npc:GetAttribute("Class") == class then
-						local model = getModelForNpc(botModelFolder, npc)
-						if model then
-							if state then
-								addEsp(model, class)
-							else
-								removeEsp(model)
-							end
-						end
-					end
-				end
-			end
-		)
-
-		CoreGuiNotification("Class Loaded", displayName .. " toggle has been loaded in the GUI.", 3)
-	end
-
-	local function trackNpc(npc)
-		trackedNpcs[npc] = true
-
-		table.insert(connections,
-			npc:GetAttributeChangedSignal("Class"):Connect(function()
-				local class = npc:GetAttribute("Class")
-				if class then
-					createClassToggle(class)
-					tryApply(npc)
-				end
-			end)
-		)
-		
-		for attrName, attrValue in pairs(npc:GetAttributes()) do
-			if string.sub(attrName, 1, 1) == "v" and typeof(attrValue) == "NumberValue" then
-				table.insert(connections,
-					npc:GetAttributeChangedSignal(attrName):Connect(function()
-						local health = npc:GetAttribute(attrName)
-						local model = getModelForNpc(botModelFolder, npc)
-						
-						if health <= 0 and model then
-							if not includeDead then
-								removeEsp(model)
-							end
-						elseif health > 0 and model then
-							addEsp(model, npc:GetAttribute("Class"))
-						end
-					end)
-				)
-			end
-		end
-
+	local function mapNpc(npc)
 		local class = npc:GetAttribute("Class")
-		if class then
-			createClassToggle(class)
-			tryApply(npc)
+		if not class then return end
+
+		createToggle(class)
+
+		for _, model in ipairs(botModelFolder:GetChildren()) do
+			for _, attr in pairs(model:GetAttributes()) do
+				if attr == npc.Name then
+					bindModel(model, class)
+					break
+				end
+			end
 		end
 	end
 
 	for _, npc in ipairs(botDataFolder:GetChildren()) do
-		trackNpc(npc)
+		mapNpc(npc)
+	end
+	
+	for _, pre in ipairs(preClass) do
+		createToggle(pre)
 	end
 
-	table.insert(connections, botDataFolder.ChildAdded:Connect(trackNpc))
-
-	table.insert(connections,
-		botModelFolder.ChildAdded:Connect(function()
-			for npc in pairs(trackedNpcs) do
-				tryApply(npc)
-			end
-		end)
-	)
-
-	table.insert(connections,
-		botDataFolder.ChildRemoved:Connect(function(npc)
-			local model = getModelForNpc(botModelFolder, npc)
-			if model then
-				removeEsp(model)
-			end
-			trackedNpcs[npc] = nil
-		end)
-	)
+	table.insert(connections, botDataFolder.ChildAdded:Connect(mapNpc))
 end
 
 local function initiate()
@@ -284,8 +253,8 @@ local function initiate()
 	end)
 
 	hook()
-	
-	CoreGuiNotification("Loaded", "The GUI has been loaded. If you don't see a class toggle that you need, it is because the class hasn't appeared in the map yet.", 7)
+
+	CoreGuiNotification("Loaded", "ESP system loaded successfully.", 6)
 end
 
 initiate()
